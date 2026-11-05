@@ -1,0 +1,48 @@
+name: Build telegram-bot-api
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Clone official source
+        shell: pwsh
+        run: |
+          git clone --recursive https://github.com/tdlib/telegram-bot-api
+          cd telegram-bot-api
+          $c = git rev-parse HEAD
+          echo "SRC_COMMIT=$c" >> $env:GITHUB_ENV
+          echo "Source commit: $c"
+      - name: Install dependencies (vcpkg)
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg
+          ./vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          ./vcpkg/vcpkg install --triplet x64-windows gperf openssl zlib
+      - name: Build
+        shell: pwsh
+        working-directory: ./telegram-bot-api
+        run: |
+          $v = Resolve-Path ../vcpkg
+          cmake -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$v/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_INSTALL_PREFIX="$PWD/../install" -B build -S .
+          cmake --build build --config Release --target install -- /m
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pkg | Out-Null
+          Copy-Item install/bin/* pkg/
+          Copy-Item vcpkg/installed/x64-windows/bin/*.dll pkg/
+          Compress-Archive pkg/* telegram-bot-api-win64.zip
+          Get-FileHash telegram-bot-api-win64.zip -Algorithm SHA256 | Format-List
+          Get-ChildItem pkg
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "build-$(Get-Date -Format yyyyMMdd-HHmm)"
+          gh release create $tag telegram-bot-api-win64.zip --repo $env:GITHUB_REPOSITORY --title $tag --notes "Official tdlib/telegram-bot-api, commit $env:SRC_COMMIT"
